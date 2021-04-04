@@ -69,28 +69,28 @@ class App {
     val eventsToDelete = (1 to 100).map(_ => new Event(EventType.Delete, UUID.randomUUID()))
     val eventsToReturn = (1 to 150).map(_ => new Event(EventType.Return, UUID.randomUUID()))
 
+    val expectedDeletedEvents = new util.ArrayList(eventsToDelete.asJava)
     val deletedCompletionAsync = Future {
-      val expectedEvents = new util.ArrayList(eventsToDelete.asJava)
-      while (!expectedEvents.isEmpty) {
+      while (!expectedDeletedEvents.isEmpty) {
         val event = processing.deletedEvents.takeFirst()
-        if (!expectedEvents.remove(event)) {
+        if (!expectedDeletedEvents.remove(event)) {
           throw new Exception(s"Unexpected event in the Deleted queue: $event")
         }
 
-        println(s"Got awaited Delete event ${event}, ${expectedEvents.size()} left")
+        println(s"Got awaited Delete event ${event}, ${expectedDeletedEvents.size()} left")
       }
       println("Successfully awaited all Delete events")
     }
 
+    val expectedReturnedEvents = new util.ArrayList(eventsToReturn.asJava)
     val returnedCompletionAsync = Future {
-      val expectedEvents = new util.ArrayList(eventsToReturn.asJava)
-      while (!expectedEvents.isEmpty) {
+      while (!expectedReturnedEvents.isEmpty) {
         val event = processing.returnedEvents.takeFirst()
-        if (!expectedEvents.remove(event)) {
+        if (!expectedReturnedEvents.remove(event)) {
           throw new Exception(s"Unexpected event in the Returned queue: $event")
         }
 
-        println(s"Got awaited Return event ${event}, ${expectedEvents.size()} left")
+        println(s"Got awaited Return event ${event}, ${expectedReturnedEvents.size()} left")
       }
       println("Successfully awaited all Return events")
     }
@@ -122,18 +122,44 @@ class App {
     }
     println("All messages have been sent")
 
-    Try { Await.result(deletedCompletionAsync, 15.seconds) } match {
-      case Success(_) => println("GOT ALL DELETED EVENTS")
-      case Failure(ex) => throw new Exception("Failed to await all DELETED events", ex)
-    }
+    try {
+      Try {
+        Await.result(deletedCompletionAsync, 15.seconds)
+      } match {
+        case Success(_) => println("GOT ALL DELETED EVENTS")
+        case Failure(ex) => throw new Exception(s"Failed to await all DELETED events. ${expectedDeletedEvents.size()} more is expected", ex)
+      }
 
-    Try { Await.result(returnedCompletionAsync, 15.seconds) } match {
-      case Success(_) => println("GOT ALL RETURNED EVENTS")
-      case Failure(ex) => throw new Exception("Failed to await all RETURN events", ex)
+      Try {
+        Await.result(returnedCompletionAsync, 15.seconds)
+      } match {
+        case Success(_) => println("GOT ALL RETURNED EVENTS")
+        case Failure(ex) => throw new Exception(s"Failed to await all RETURN events. ${expectedReturnedEvents.size()} more is expected", ex)
+      }
+    } catch {
+      case ex: Exception =>
+        checkDLQ(client)
+        throw ex
     }
 
   }
 
+  private def checkDLQ(client: SqsAsyncClient): Unit = {
+    val queueUrl = client.getQueueUrl(GetQueueUrlRequest.builder().queueName(s"$QUEUE_NAME-dlq").build()).get().queueUrl()
+    val dlqMessages = client.receiveMessage(
+      ReceiveMessageRequest.builder()
+        .queueUrl(queueUrl)
+        .maxNumberOfMessages(10)
+        .waitTimeSeconds(5)
+        .build()
+    ).get().messages()
+
+    if (dlqMessages.isEmpty) {
+      println("DLQ is empty")
+    } else {
+      println(s"DLQ contains messages: ${dlqMessages}")
+    }
+  }
 }
 
 class QueueProcessing(sqsEndpoint: String, val queueUrl: String) extends AutoCloseable{
