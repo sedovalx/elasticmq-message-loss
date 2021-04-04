@@ -1,10 +1,12 @@
 # Bug reproduction: elasticmq send/receive in batches
 
+I really hope that it's just me doing something in a wrong way. 
+
 ## Scenario
 
 The code inside creates 2 queues - the main one and the DLQ. The target is either an 
 embedded elasticmq instance or AWS SQS. Then, it generates and sends messages of 2 types 
-to the main queue in batches. There is a background thread that polls the queue, split 
+to the main queue in batches. There is a background thread that polls the queue, splits 
 the events by type and either deletes events in batches or changes their visibility timeout (sets
 1 hour). 
 
